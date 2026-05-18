@@ -32,4 +32,5 @@ Este projeto já possui um arquivo `render.yaml` para deploy automático.
 ## Observações
 
 - A app já usa `host="0.0.0.0"` e `port=5000`, então está pronta para receber conexões externas.
+- O arquivo principal do app é `app.py`.
 - O PDF só será processado corretamente se o `pdftotext` estiver disponível, o que o `Dockerfile` já resolve.

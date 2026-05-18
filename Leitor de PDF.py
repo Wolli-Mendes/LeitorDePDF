@@ -16,6 +16,7 @@ Uso:
 import io
 import re
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -26,6 +27,11 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from flask import Flask, render_template_string, request, send_file, jsonify
 
+try:
+    from PyPDF2 import PdfReader
+except ImportError:
+    PdfReader = None
+
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
@@ -34,6 +40,29 @@ PDF_PASSWORD = "08423"
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_text_with_pypdf2(pdf_path: str) -> str:
+    if PdfReader is None:
+        return ""
+
+    reader = PdfReader(pdf_path)
+    if reader.is_encrypted:
+        try:
+            result = reader.decrypt(PDF_PASSWORD)
+        except Exception:
+            result = 0
+        if result == 0:
+            raise RuntimeError("Senha incorreta para PDF protegido.")
+
+    text_parts = []
+    for page in reader.pages:
+        try:
+            page_text = page.extract_text() or ""
+        except Exception:
+            page_text = ""
+        text_parts.append(page_text)
+    return "\n".join(text_parts)
+
 
 def pdf_to_text(pdf_bytes: bytes) -> str:
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
@@ -45,18 +74,36 @@ def pdf_to_text(pdf_bytes: bytes) -> str:
         return subprocess.run(args, capture_output=True, text=True)
 
     try:
-        r = run_pdftotext(["pdftotext", "-layout", "-upw", PDF_PASSWORD, tmp_path, txt_path])
-        if r.returncode != 0:
-            # Tenta abrir sem senha caso o PDF não esteja realmente protegido
-            r = run_pdftotext(["pdftotext", "-layout", tmp_path, txt_path])
-        if r.returncode != 0:
-            raise RuntimeError(f"pdftotext: {r.stderr.strip() or r.stdout.strip()}")
-        with open(txt_path, encoding="utf-8") as f:
-            return f.read()
+        pdftotext_cmd = shutil.which("pdftotext")
+        text = ""
+
+        if pdftotext_cmd:
+            for args in [
+                [pdftotext_cmd, "-layout", "-upw", PDF_PASSWORD, tmp_path, txt_path],
+                [pdftotext_cmd, "-layout", "-opw", PDF_PASSWORD, tmp_path, txt_path],
+                [pdftotext_cmd, "-layout", tmp_path, txt_path],
+            ]:
+                r = run_pdftotext(args)
+                if r.returncode == 0:
+                    with open(txt_path, encoding="utf-8") as f:
+                        text = f.read()
+                    break
+
+        if not text and PdfReader is not None:
+            text = _extract_text_with_pypdf2(tmp_path)
+
+        if not text:
+            raise RuntimeError(
+                "Não foi possível extrair texto do PDF. Verifique se o arquivo está protegido e se a senha 08423 está correta."
+            )
+
+        return text
     finally:
         for p in [tmp_path, txt_path]:
-            try: os.unlink(p)
-            except: pass
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
 
 
 def hms_to_min(s: str) -> int:
@@ -170,6 +217,11 @@ def parse_solides(pdf_bytes: bytes) -> bytes:
         r = _parse_solides_page(page)
         if r:
             records.append(r)
+
+    if not records:
+        raise RuntimeError(
+            "Nenhum registro Sólides encontrado. Verifique se o PDF é de folha de ponto Sólides e se a senha está correta."
+        )
 
     return _build_solides_excel(records)
 
@@ -329,13 +381,13 @@ def _build_solides_excel(records: list[dict]) -> bytes:
 # ─────────────────────────────────────────────────────────────────────────────
 
 CERTIF_RE = re.compile(
-    r"^\s+(\d{7}/\d{2})\s+(\S.+?)\s{2,}"
+    r"^\s*(\d{7}/\d{2})\s+(\S.+?)\s{2,}"
     r"\d{2}/\d{2}/\d{4}\s+(?:MAS|FEM)\s+\w+\s+"
     r"(CONJ|FILH|OUT)?\s*TNDA\s+\S+\s+"
     r"(?:\w{2}\s+)?\d{2}/\d{4}\s+([\d,.]+[-]?)\s+[\d,.]+\s*$"
 )
 CONT_RE = re.compile(
-    r"^\s{20,}TNDA\s+\S+\s+(?:\w{2}\s+)?\d{2}/\d{4}\s+([\d,.]+[-]?)\s+[\d,.]+\s*$"
+    r"^\s*TNDA\s+\S+\s+(?:\w{2}\s+)?\d{2}/\d{4}\s+([\d,.]+[-]?)\s+[\d,.]+\s*$"
 )
 
 
@@ -392,6 +444,10 @@ def parse_bradesco(pdf_bytes: bytes) -> bytes:
                 records_map[current]["valor"] += _parse_val(mc.group(1))
 
     records = [records_map[c] for c in order]
+    if not records:
+        raise RuntimeError(
+            "Nenhum registro Bradesco Dental encontrado. Verifique se o PDF é uma fatura Bradesco Dental válida e se a senha está correta."
+        )
     return _build_bradesco_excel(records)
 
 

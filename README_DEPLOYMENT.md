@@ -11,13 +11,14 @@ Este repositório contém um app Flask para processar PDFs e gerar Excel.
 
 ### Render.com
 
+Este projeto já possui um arquivo `render.yaml` para deploy automático.
+
 1. Crie uma conta em https://render.com
-2. Conecte seu repositório GitHub que contenha este projeto
-3. Crie um novo serviço Web:
-   - Tipo: `Web Service`
-   - Build Command: `docker build -t app .`
-   - Start Command: `python "Leitor de PDF.py"`
-4. Render usará a porta `5000` exposta pelo `Dockerfile`.
+2. Conecte seu repositório GitHub `Wolli-Mendes/LeitorDePDF`
+3. Crie um novo serviço Web usando o arquivo `render.yaml` existente:
+   - Tipo: `Docker`
+   - Render usará o `Dockerfile` e o `CMD` definido no Dockerfile.
+4. O Render usa a porta dinâmica `PORT`, mas o app já está configurado para `0.0.0.0` e aceita `PORT` do ambiente.
 5. Após o deploy, use a URL pública fornecida pelo Render.
 
 ### Railway.app

@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: leitor-de-pdf
+    env: docker
+    branch: master
+    dockerfilePath: Dockerfile
+    plan: starter
+    healthCheckPath: /
+    autoDeploy: true

@@ -6,10 +6,10 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY ["Leitor de PDF.py", "."]
+COPY ["app.py", "."]
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 5000
-CMD ["python", "Leitor de PDF.py"]
+CMD ["python", "app.py"]

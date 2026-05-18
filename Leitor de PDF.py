@@ -29,6 +29,8 @@ from flask import Flask, render_template_string, request, send_file, jsonify
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
+PDF_PASSWORD = "08423"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -38,13 +40,17 @@ def pdf_to_text(pdf_bytes: bytes) -> str:
         tmp.write(pdf_bytes)
         tmp_path = tmp.name
     txt_path = tmp_path.replace(".pdf", ".txt")
+
+    def run_pdftotext(args: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(args, capture_output=True, text=True)
+
     try:
-        r = subprocess.run(
-            ["pdftotext", "-layout", tmp_path, txt_path],
-            capture_output=True, text=True
-        )
+        r = run_pdftotext(["pdftotext", "-layout", "-upw", PDF_PASSWORD, tmp_path, txt_path])
         if r.returncode != 0:
-            raise RuntimeError(f"pdftotext: {r.stderr}")
+            # Tenta abrir sem senha caso o PDF não esteja realmente protegido
+            r = run_pdftotext(["pdftotext", "-layout", tmp_path, txt_path])
+        if r.returncode != 0:
+            raise RuntimeError(f"pdftotext: {r.stderr.strip() or r.stdout.strip()}")
         with open(txt_path, encoding="utf-8") as f:
             return f.read()
     finally:

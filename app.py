@@ -35,24 +35,24 @@ except ImportError:
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
-PDF_PASSWORD = "08423"
-
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _extract_text_with_pypdf2(pdf_path: str) -> str:
+def _extract_text_with_pypdf2(pdf_path: str, password: str | None = None) -> str:
     if PdfReader is None:
         return ""
 
     reader = PdfReader(pdf_path)
     if reader.is_encrypted:
+        if password is None:
+            password = ""
         try:
-            result = reader.decrypt(PDF_PASSWORD)
+            result = reader.decrypt(password)
         except Exception:
             result = 0
         if result == 0:
-            raise RuntimeError("Senha incorreta para PDF protegido.")
+            raise RuntimeError("PDF protegido por senha. Digite a senha correta ou envie um PDF sem proteção.")
 
     text_parts = []
     for page in reader.pages:
@@ -64,7 +64,7 @@ def _extract_text_with_pypdf2(pdf_path: str) -> str:
     return "\n".join(text_parts)
 
 
-def pdf_to_text(pdf_bytes: bytes) -> str:
+def pdf_to_text(pdf_bytes: bytes, password: str | None = None) -> str:
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         tmp.write(pdf_bytes)
         tmp_path = tmp.name
@@ -78,19 +78,25 @@ def pdf_to_text(pdf_bytes: bytes) -> str:
         text = ""
 
         if pdftotext_cmd:
-            for args in [
-                [pdftotext_cmd, "-layout", "-upw", PDF_PASSWORD, tmp_path, txt_path],
-                [pdftotext_cmd, "-layout", "-opw", PDF_PASSWORD, tmp_path, txt_path],
-                [pdftotext_cmd, "-layout", tmp_path, txt_path],
-            ]:
+            if password:
+                for args in [
+                    [pdftotext_cmd, "-layout", "-upw", password, tmp_path, txt_path],
+                    [pdftotext_cmd, "-layout", "-opw", password, tmp_path, txt_path],
+                ]:
+                    r = run_pdftotext(args)
+                    if r.returncode == 0:
+                        with open(txt_path, encoding="utf-8") as f:
+                            text = f.read()
+                        break
+            if not text:
+                args = [pdftotext_cmd, "-layout", tmp_path, txt_path]
                 r = run_pdftotext(args)
                 if r.returncode == 0:
                     with open(txt_path, encoding="utf-8") as f:
                         text = f.read()
-                    break
 
         if not text and PdfReader is not None:
-            text = _extract_text_with_pypdf2(tmp_path)
+            text = _extract_text_with_pypdf2(tmp_path, password)
 
         if not text:
             raise RuntimeError(
@@ -206,8 +212,8 @@ def _classify_day_hours(page: str) -> tuple[int, int]:
     return extra_total, banco_total, atraso_total
 
 
-def parse_solides(pdf_bytes: bytes) -> bytes:
-    text = pdf_to_text(pdf_bytes)
+def parse_solides(pdf_bytes: bytes, password: str | None = None) -> bytes:
+    text = pdf_to_text(pdf_bytes, password)
     pages = text.split("\f")
 
     records = []
@@ -396,8 +402,8 @@ def _parse_val(s: str) -> float:
     return -float(s[:-1]) if s.endswith("-") else float(s)
 
 
-def parse_bradesco(pdf_bytes: bytes) -> bytes:
-    text = pdf_to_text(pdf_bytes)
+def parse_bradesco(pdf_bytes: bytes, password: str | None = None) -> bytes:
+    text = pdf_to_text(pdf_bytes, password)
     lines = text.splitlines()
 
     # Pass 1: titular names
@@ -675,6 +681,17 @@ HTML = r"""<!DOCTYPE html>
   .btn:disabled { opacity: .4; cursor: not-allowed; }
   .btn-blue  { background: var(--accent1); color: #fff; }
   .btn-green { background: var(--accent2); color: #fff; }
+  .password-input {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: #12151f;
+    color: var(--text);
+    font-size: 14px;
+    margin-top: 10px;
+  }
+  .password-input::placeholder { color: var(--muted); }
 
   /* STATUS */
   .status {
@@ -756,6 +773,7 @@ HTML = r"""<!DOCTYPE html>
       <div class="dz-text"><strong>Clique</strong> ou arraste o PDF aqui</div>
       <div class="dz-filename" id="fn-solides"></div>
     </div>
+    <input class="password-input" type="password" id="pwd-solides" placeholder="Senha do PDF (opcional)">
 
     <button class="btn btn-blue" id="btn-solides" onclick="process('solides')" disabled>
       <span>Gerar Relatório Excel</span>
@@ -778,6 +796,7 @@ HTML = r"""<!DOCTYPE html>
       <div class="dz-text"><strong>Clique</strong> ou arraste o PDF aqui</div>
       <div class="dz-filename" id="fn-bradesco"></div>
     </div>
+    <input class="password-input" type="password" id="pwd-bradesco" placeholder="Senha do PDF (opcional)">
 
     <button class="btn btn-green" id="btn-bradesco" onclick="process('bradesco')" disabled>
       <span>Gerar Relatório Excel</span>
@@ -861,9 +880,12 @@ HTML = r"""<!DOCTYPE html>
     btn.disabled = true;
     setStatus('loading', `Processando ${file.name}…`);
 
+    const pwdId = type === 'solides' ? 'pwd-solides' : 'pwd-bradesco';
+    const password = document.getElementById(pwdId).value || '';
     const form = new FormData();
     form.append('file', file);
     form.append('type', type);
+    form.append('password', password);
 
     try {
       const res = await fetch('/process', { method: 'POST', body: form });
@@ -904,6 +926,7 @@ def index():
 def process():
     file = request.files.get("file")
     kind = request.form.get("type", "")
+    password = request.form.get("password", "") or None
 
     if not file or not file.filename.endswith(".pdf"):
         return jsonify({"error": "Envie um arquivo PDF válido."}), 400
@@ -912,10 +935,10 @@ def process():
 
     try:
         if kind == "solides":
-            xlsx_bytes = parse_solides(pdf_bytes)
+            xlsx_bytes = parse_solides(pdf_bytes, password)
             filename = Path(file.filename).stem + "_relatorio.xlsx"
         elif kind == "bradesco":
-            xlsx_bytes = parse_bradesco(pdf_bytes)
+            xlsx_bytes = parse_bradesco(pdf_bytes, password)
             filename = Path(file.filename).stem + "_fatura.xlsx"
         else:
             return jsonify({"error": "Tipo inválido."}), 400

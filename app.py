@@ -45,14 +45,13 @@ def _extract_text_with_pypdf2(pdf_path: str, password: str | None = None) -> str
 
     reader = PdfReader(pdf_path)
     if reader.is_encrypted:
-        if password is None:
-            password = ""
+        pwd = password if password else ""
         try:
-            result = reader.decrypt(password)
+            result = reader.decrypt(pwd)
         except Exception:
             result = 0
         if result == 0:
-            raise RuntimeError("PDF protegido por senha. Digite a senha correta ou envie um PDF sem proteção.")
+            raise RuntimeError('PDF protegido. Informe a senha correta.')
 
     text_parts = []
     for page in reader.pages:
@@ -64,7 +63,7 @@ def _extract_text_with_pypdf2(pdf_path: str, password: str | None = None) -> str
     return "\n".join(text_parts)
 
 
-def pdf_to_text(pdf_bytes: bytes, password: str | None = None) -> str:
+def pdf_to_text(pdf_bytes: bytes, password: str = '') -> str:
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         tmp.write(pdf_bytes)
         tmp_path = tmp.name
@@ -78,29 +77,20 @@ def pdf_to_text(pdf_bytes: bytes, password: str | None = None) -> str:
         text = ""
 
         if pdftotext_cmd:
-            if password:
-                for args in [
-                    [pdftotext_cmd, "-layout", "-upw", password, tmp_path, txt_path],
-                    [pdftotext_cmd, "-layout", "-opw", password, tmp_path, txt_path],
-                ]:
-                    r = run_pdftotext(args)
-                    if r.returncode == 0:
-                        with open(txt_path, encoding="utf-8") as f:
-                            text = f.read()
-                        break
-            if not text:
-                args = [pdftotext_cmd, "-layout", tmp_path, txt_path]
-                r = run_pdftotext(args)
-                if r.returncode == 0:
-                    with open(txt_path, encoding="utf-8") as f:
-                        text = f.read()
+            cmd = ['pdftotext', '-layout'] + (['-upw', password] if password else []) + [tmp_path, txt_path]
+            r = run_pdftotext(cmd)
+            if r.returncode == 0:
+                with open(txt_path, encoding="utf-8") as f:
+                    text = f.read()
+            elif password and ('password' in r.stderr.lower() or 'encrypted' in r.stderr.lower()):
+                raise RuntimeError('PDF protegido. Informe a senha correta.')
 
         if not text and PdfReader is not None:
-            text = _extract_text_with_pypdf2(tmp_path, password)
+            text = _extract_text_with_pypdf2(tmp_path, password if password else None)
 
         if not text:
             raise RuntimeError(
-                "Não foi possível extrair texto do PDF. Verifique se o arquivo está protegido e se a senha 08423 está correta."
+                "Não foi possível extrair texto do PDF. Verifique se o arquivo está em um formato válido."
             )
 
         return text
@@ -212,7 +202,7 @@ def _classify_day_hours(page: str) -> tuple[int, int]:
     return extra_total, banco_total, atraso_total
 
 
-def parse_solides(pdf_bytes: bytes, password: str | None = None) -> bytes:
+def parse_solides(pdf_bytes: bytes, password: str = '') -> bytes:
     text = pdf_to_text(pdf_bytes, password)
     pages = text.split("\f")
 
@@ -402,7 +392,7 @@ def _parse_val(s: str) -> float:
     return -float(s[:-1]) if s.endswith("-") else float(s)
 
 
-def parse_bradesco(pdf_bytes: bytes, password: str | None = None) -> bytes:
+def parse_bradesco(pdf_bytes: bytes, password: str = '') -> bytes:
     text = pdf_to_text(pdf_bytes, password)
     lines = text.splitlines()
 
@@ -926,7 +916,7 @@ def index():
 def process():
     file = request.files.get("file")
     kind = request.form.get("type", "")
-    password = request.form.get("password", "") or None
+    password = request.form.get("password", "")
 
     if not file or not file.filename.endswith(".pdf"):
         return jsonify({"error": "Envie um arquivo PDF válido."}), 400
